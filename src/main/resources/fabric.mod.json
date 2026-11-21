@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "opapp",
+  "version": "${version}",
+  "name": "OPAPP",
+  "description": "Offizielle Companion-Mod für die OPAPP (OPSUCHT.net).",
+  "authors": [
+    "MobileGamer1577"
+  ],
+  "contact": {
+    "homepage": "https://github.com/MobileGamer1577/opapp",
+    "sources": "https://github.com/MobileGamer1577/opapp"
+  },
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "de.opapp.OpappMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
