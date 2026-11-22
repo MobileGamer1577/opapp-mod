@@ -198,15 +198,20 @@ public final class ScreenWatcher {
         int x = readIntField(container, "x", "field_2776", (container.width - backgroundWidth) / 2);
         int y = readIntField(container, "y", "field_2800", (container.height - backgroundHeight) / 2);
 
+        Slot best = null;
+        double bestDistSq = 26.0 * 26.0;
+
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double x1 = x + slot.x - 3.0;
-            double y1 = y + slot.y - 3.0;
-            if (mouseX >= x1 && mouseX <= x1 + 22.0 && mouseY >= y1 && mouseY <= y1 + 22.0) {
-                return slot;
+            double cx = x + slot.x + 8.0;
+            double cy = y + slot.y + 8.0;
+            double distSq = (mouseX - cx) * (mouseX - cx) + (mouseY - cy) * (mouseY - cy);
+            if (distSq <= bestDistSq) {
+                bestDistSq = distSq;
+                best = slot;
             }
         }
-        return null;
+        return best;
     }
 
     private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
@@ -331,6 +336,7 @@ public final class ScreenWatcher {
         switch (kind) {
             case OVERVIEW -> {
                 category = null;
+                pendingCategory = null;
                 page = 0;
                 pendingPageDelta = 0;
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
