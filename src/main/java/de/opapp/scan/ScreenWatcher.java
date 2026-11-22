@@ -165,8 +165,6 @@ public final class ScreenWatcher {
             clicksSeen++;
             Slot hovered = findHoveredSlot(client, container);
             if (hovered != null && hovered.hasStack()) {
-                lastClickInfo = "Slot [" + hovered.id + "] ("
-                        + TextClean.clean(hovered.getStack().getName().getString()) + ")";
                 handleClick(hovered.id, hovered.getStack());
             } else {
                 double scale = client.getWindow().getScaleFactor();
@@ -198,7 +196,7 @@ public final class ScreenWatcher {
         int y = (container.height - backgroundHeight) / 2;
 
         Slot best = null;
-        double bestDistSq = 32.0 * 32.0;
+        double bestDistSq = 36.0 * 36.0;
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
@@ -231,15 +229,23 @@ public final class ScreenWatcher {
         int menuSlots = container.getScreenHandler().getRows() * 9;
         if (slotId < 0 || slotId >= menuSlots) return;
 
+        String itemName = TextClean.clean(stack.getName().getString());
         MenuScanner.ClickAction action = scanner.classifyClick(toSlotData(slotId, stack));
         switch (action.kind()) {
             case OPEN_CATEGORY -> {
                 pendingCategory = action.category();
                 pendingPageDelta = 0;
+                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Kat \"" + action.category() + "\"";
             }
-            case NEXT_PAGE -> pendingPageDelta = 1;
-            case PREV_PAGE -> pendingPageDelta = -1;
-            default -> { }
+            case NEXT_PAGE -> {
+                pendingPageDelta = 1;
+                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Weiter (+1)";
+            }
+            case PREV_PAGE -> {
+                pendingPageDelta = -1;
+                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (-1)";
+            }
+            default -> lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Keine Aktion";
         }
     }
 
