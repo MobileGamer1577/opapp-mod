@@ -6,27 +6,6 @@
 //  ❌ NICHT ÄNDERN: classify() zählt nur "strong"-Treffer des
 //                   TaskLoreParser (sonst werden Blätter-Buttons mit
 //                   "Seite 1/3" fälschlich zu Aufgaben)
-//
-//  AUFBAU DER OPSUCHT-MENÜS (aus den Debug-Dateien):
-//    Übersicht  Einträge wie "Miner" mit der Lore "22 von 43 abgeschlossen"
-//               (→ PageKind.OVERVIEW, wird nicht gesendet). Mehrere Seiten,
-//               Buttons "Zurück" / "Weiter".
-//    Kategorie  Einträge wie "Lapisminer" mit "Fortschritt: 2.500/2.500"
-//               (→ PageKind.TASKS). Mehrere Seiten.
-//    Der Fenstertitel besteht nur aus Font-Glyphen ("ሹሹሹሹሹሹⴁ") und
-//    enthält KEINEN Kategorienamen. Die Kategorie ist deshalb der Name
-//    des Übersichts-Eintrags, den der Spieler angeklickt hat – den
-//    erkennt der ScreenWatcher über classifyClick().
-//
-//  ÄNDERUNGEN (Erfolge-Update):
-//    - NEU: Datei.
-//
-//  ÄNDERUNGEN (Fix 1.0.1):
-//    - 🐛 Kategorie kam aus dem Fenstertitel → nur Glyphen → Worker hat
-//      ALLE Aufgaben abgelehnt ("0 Aufgaben synchronisiert"). Jetzt:
-//      Kategorie = Name des angeklickten Menüeintrags.
-//    - NEU: classify(), scanTasks(), classifyClick(); Sortier-Nummer über
-//      mehrere Seiten; Ziel-Namen aus der Lore für den Zähler.
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.scan.erfolge;
@@ -124,7 +103,6 @@ public final class ErfolgeScanner implements MenuScanner {
             return ClickAction.NONE;
         }
 
-        // Eintrag der Übersicht ("22 von 43 abgeschlossen") → Kategorie öffnen
         TaskLoreParser.Reading r = TaskLoreParser.read(slot.lore());
         if (r != null && r.area() && r.strong()) {
             return new ClickAction(ClickKind.OPEN_CATEGORY, name);
