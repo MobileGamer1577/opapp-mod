@@ -184,6 +184,14 @@ public final class ScreenWatcher {
     }
 
     private static Slot findHoveredSlot(MinecraftClient client, GenericContainerScreen container) {
+        Object directHovered = readObjectField(container, "hoveredSlot", "field_2787");
+        if (directHovered instanceof Slot slot && slot.hasStack()) {
+            int menuSlots = container.getScreenHandler().getRows() * 9;
+            if (slot.id >= 0 && slot.id < menuSlots) {
+                return slot;
+            }
+        }
+
         GenericContainerScreenHandler handler = container.getScreenHandler();
         if (handler == null) return null;
 
@@ -212,6 +220,22 @@ public final class ScreenWatcher {
             }
         }
         return best;
+    }
+
+    private static Object readObjectField(Object target, String primary, String fallback) {
+        for (String name : new String[]{primary, fallback}) {
+            Class<?> c = target.getClass();
+            while (c != null) {
+                try {
+                    Field f = c.getDeclaredField(name);
+                    f.setAccessible(true);
+                    return f.get(target);
+                } catch (ReflectiveOperationException ignored) {
+                    c = c.getSuperclass();
+                }
+            }
+        }
+        return null;
     }
 
     private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
