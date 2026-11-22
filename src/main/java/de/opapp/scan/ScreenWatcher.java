@@ -195,9 +195,19 @@ public final class ScreenWatcher {
         int x = (container.width - backgroundWidth) / 2;
         int y = (container.height - backgroundHeight) / 2;
 
-        Slot best = null;
-        double bestDistSq = 36.0 * 36.0;
+        // 1. Exakter Treffer auf dem 16x16-Slot-Feld (mit kleinem Rand)
+        for (Slot slot : handler.slots) {
+            if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
+            double x1 = x + slot.x - 2.0;
+            double y1 = y + slot.y - 2.0;
+            if (mouseX >= x1 && mouseX <= x1 + 20.0 && mouseY >= y1 && mouseY <= y1 + 20.0) {
+                return slot;
+            }
+        }
 
+        // 2. Fallback: nächster Slot innerhalb von 52px
+        Slot best = null;
+        double bestDistSq = 52.0 * 52.0;
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
             double centerX = x + slot.x + 8.0;
@@ -233,9 +243,11 @@ public final class ScreenWatcher {
         MenuScanner.ClickAction action = scanner.classifyClick(toSlotData(slotId, stack));
         switch (action.kind()) {
             case OPEN_CATEGORY -> {
-                pendingCategory = action.category();
-                pendingPageDelta = 0;
-                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Kat \"" + action.category() + "\"";
+                if (action.category() != null && !action.category().isBlank()) {
+                    pendingCategory = action.category().trim();
+                    pendingPageDelta = 0;
+                    lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Kat \"" + pendingCategory + "\"";
+                }
             }
             case NEXT_PAGE -> {
                 pendingPageDelta = 1;
@@ -320,7 +332,7 @@ public final class ScreenWatcher {
             }
             case TASKS -> {
                 String activeCategory = pendingCategory != null ? pendingCategory : category;
-                if (activeCategory == null) {
+                if (activeCategory == null || activeCategory.isBlank()) {
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
                     warnNoCategory();
                 } else {
