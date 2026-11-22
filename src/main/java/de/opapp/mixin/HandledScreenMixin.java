@@ -5,20 +5,6 @@
 //  ❌ NICHT ÄNDERN: Es wird NICHTS verändert, abgebrochen oder gesendet –
 //                   der Mixin gibt nur "Slot X wurde angeklickt" an den
 //                   ScreenWatcher weiter (rein lesend, @At("HEAD")).
-//
-//  WARUM: Der Fenstertitel der OPSUCHT-Erfolge besteht nur aus
-//  Font-Glyphen. Den Namen der Kategorie ("Miner") erfährt die Mod
-//  deshalb nur, indem sie mitbekommt, welchen Übersichts-Eintrag der
-//  Spieler anklickt – und auf "Weiter"/"Zurück" zum Seitenwechsel.
-//
-//  SICHERHEIT: require = 0 (und defaultRequire = 0 in opapp.mixins.json) –
-//  sollte sich die Zielmethode in einer anderen Minecraft-Version ändern,
-//  stürzt das Spiel NICHT ab; die Klick-Erkennung ist dann nur inaktiv
-//  (in /opapp debug steht "Klicks erkannt: 0"). Jede Ausnahme im Handler
-//  wird abgefangen, damit nie ein Klick im Spiel blockiert wird.
-//
-//  ÄNDERUNGEN (Fix 1.0.1):
-//    - NEU: Datei.
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.mixin;
@@ -36,6 +22,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.lang.reflect.Field;
 
 @Mixin(HandledScreen.class)
 public abstract class HandledScreenMixin {
@@ -73,16 +61,32 @@ public abstract class HandledScreenMixin {
 
         int containerWidth = 176;
         int containerHeight = 114 + rows * 18;
-        int guiLeft = (screen.width - containerWidth) / 2;
-        int guiTop = (screen.height - containerHeight) / 2;
+        int guiLeft = readIntField(screen, "x", "field_2776", (screen.width - containerWidth) / 2);
+        int guiTop = readIntField(screen, "y", "field_2800", (screen.height - containerHeight) / 2);
 
         for (Slot slot : handler.slots) {
-            int x1 = guiLeft + slot.x;
-            int y1 = guiTop + slot.y;
-            if (mouseX >= x1 - 1 && mouseX < x1 + 17 && mouseY >= y1 - 1 && mouseY < y1 + 17) {
+            int x1 = guiLeft + slot.x - 2;
+            int y1 = guiTop + slot.y - 2;
+            if (mouseX >= x1 && mouseX <= x1 + 20 && mouseY >= y1 && mouseY <= y1 + 20) {
                 return slot;
             }
         }
         return null;
+    }
+
+    private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
+        for (String name : new String[]{primary, fallback}) {
+            Class<?> c = target.getClass();
+            while (c != null) {
+                try {
+                    Field f = c.getDeclaredField(name);
+                    f.setAccessible(true);
+                    return f.getInt(target);
+                } catch (ReflectiveOperationException ignored) {
+                    c = c.getSuperclass();
+                }
+            }
+        }
+        return defaultValue;
     }
 }
