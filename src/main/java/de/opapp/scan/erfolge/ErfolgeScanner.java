@@ -1,27 +1,32 @@
 // ═══════════════════════════════════════════════════════════════
 //  ErfolgeScanner.java – Scanner für /erfolge (und /a)
 //
-//  ✅ HIER ÄNDERN: COMMANDS (weitere Aliase), IGNORED_CATEGORIES,
-//                  TITLE_PREFIX / NAVIGATION, falls OPSUCHT die
-//                  Fenstertitel oder Buttons anders benennt
-//  ❌ NICHT ÄNDERN: die Reihenfolge in scan() (erst Seite prüfen, dann
-//                   Slots lesen)
+//  ✅ HIER ÄNDERN: COMMANDS (weitere Aliase), NAVIGATION / NEXT / PREV,
+//                  falls OPSUCHT die Buttons anders benennt
+//  ❌ NICHT ÄNDERN: classify() zählt nur "strong"-Treffer des
+//                   TaskLoreParser (sonst werden Blätter-Buttons mit
+//                   "Seite 1/3" fälschlich zu Aufgaben)
 //
-//  ABLAUF EINER SEITE:
-//    1. Kategorie = Fenstertitel ohne Präfix ("Erfolge »"), ohne
-//       Seitenzahl-Anhang "(1/2)". Bleibt nichts übrig oder ist es ein
-//       Übersichts-Titel → Seite wird ignoriert (return null).
-//    2. Jeder Slot mit Lore wird mit TaskLoreParser gelesen.
-//       - area = true (Kategorie-Zusammenfassung)  → übersprungen
-//       - Navigations-Buttons (Zurück, Seite …)    → übersprungen
-//       - sonst → Aufgabe (Name, Ziel, Stand, Status, Icon, Slot)
-//
-//  Die genaue Titel-Schreibweise von OPSUCHT ist nicht dokumentiert.
-//  Mit /opapp debug lässt sich prüfen, was erkannt wurde; Anpassungen
-//  passieren dann nur in den Konstanten oben in dieser Datei.
+//  AUFBAU DER OPSUCHT-MENÜS (aus den Debug-Dateien):
+//    Übersicht  Einträge wie "Miner" mit der Lore "22 von 43 abgeschlossen"
+//               (→ PageKind.OVERVIEW, wird nicht gesendet). Mehrere Seiten,
+//               Buttons "Zurück" / "Weiter".
+//    Kategorie  Einträge wie "Lapisminer" mit "Fortschritt: 2.500/2.500"
+//               (→ PageKind.TASKS). Mehrere Seiten.
+//    Der Fenstertitel besteht nur aus Font-Glyphen ("ሹሹሹሹሹሹⴁ") und
+//    enthält KEINEN Kategorienamen. Die Kategorie ist deshalb der Name
+//    des Übersichts-Eintrags, den der Spieler angeklickt hat – den
+//    erkennt der ScreenWatcher über classifyClick().
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - 🐛 Kategorie kam aus dem Fenstertitel → nur Glyphen → Worker hat
+//      ALLE Aufgaben abgelehnt ("0 Aufgaben synchronisiert"). Jetzt:
+//      Kategorie = Name des angeklickten Menüeintrags.
+//    - NEU: classify(), scanTasks(), classifyClick(); Sortier-Nummer über
+//      mehrere Seiten; Ziel-Namen aus der Lore für den Zähler.
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.scan.erfolge;
@@ -40,25 +45,18 @@ public final class ErfolgeScanner implements MenuScanner {
     /** ✅ HIER ÄNDERN: Befehle (ohne "/"), die das Erfolge-Menü öffnen. */
     private static final Set<String> COMMANDS = Set.of("erfolge", "erfolg", "a", "achievements");
 
-    /** ✅ HIER ÄNDERN: Titel (klein), die eine Übersicht statt einer Kategorie sind. */
-    private static final Set<String> IGNORED_CATEGORIES = Set.of(
-            "übersicht", "uebersicht", "hauptmenü", "hauptmenue", "menü", "menue",
-            "kategorien", "alle", "alle erfolge");
-
-    /** Präfix wie "Erfolge » ", "Achievements: " am Titelanfang. */
-    private static final Pattern TITLE_PREFIX =
-            Pattern.compile("(?i)^\\s*(erfolge|erfolg|achievements?)\\s*[»>:|\\-–—·•]*\\s*");
-
-    /** Seitenzahl-Anhänge wie " (1/2)" oder " - Seite 2". */
-    private static final Pattern TITLE_PAGE_A =
-            Pattern.compile("\\s*[(\\[]\\s*\\d+\\s*/\\s*\\d+\\s*[)\\]]\\s*$");
-    private static final Pattern TITLE_PAGE_B =
-            Pattern.compile("(?i)\\s*[-–|:]?\\s*seite\\s*\\d+(\\s*/\\s*\\d+)?\\s*$");
-
-    /** Buttons, die zwar "x / y" in der Lore haben können, aber keine Aufgaben sind. */
+    /** Buttons, die keine Aufgaben und keine Kategorien sind. */
     private static final Pattern NAVIGATION = Pattern.compile(
             "(?i)^(seite.*|zurück|zurueck|weiter|nächste seite|naechste seite|vorherige seite"
                     + "|schließen|schliessen|back|next page|previous page|close)$");
+
+    /** Teilmenge von NAVIGATION: vorwärts blättern. */
+    private static final Pattern NEXT = Pattern.compile(
+            "(?i)^(weiter|nächste seite|naechste seite|next page)$");
+
+    /** Teilmenge von NAVIGATION: zurück blättern. */
+    private static final Pattern PREV = Pattern.compile(
+            "(?i)^(zurück|zurueck|vorherige seite|back|previous page)$");
 
     @Override
     public String menuId() {
@@ -77,12 +75,23 @@ public final class ErfolgeScanner implements MenuScanner {
     }
 
     @Override
-    public List<TaskEntry> scan(String title, List<SlotData> slots) {
-        String category = categoryFromTitle(title);
-        if (category.isEmpty() || IGNORED_CATEGORIES.contains(category.toLowerCase(Locale.ROOT))) {
-            return null; // Übersicht/Hauptmenü – nicht auswerten
+    public PageKind classify(List<SlotData> slots) {
+        int areas = 0;
+        int tasks = 0;
+        for (SlotData slot : slots) {
+            if (slot.lore().isEmpty() || isNavigation(slot.name())) continue;
+            TaskLoreParser.Reading r = TaskLoreParser.read(slot.lore());
+            if (r == null || !r.strong()) continue;
+            if (r.area()) areas++;
+            else tasks++;
         }
+        if (tasks > 0) return PageKind.TASKS;
+        if (areas > 0) return PageKind.OVERVIEW;
+        return PageKind.EMPTY;
+    }
 
+    @Override
+    public List<TaskEntry> scanTasks(String category, int page, List<SlotData> slots) {
         List<TaskEntry> entries = new ArrayList<>();
         for (SlotData slot : slots) {
             if (slot.lore().isEmpty()) continue;
@@ -96,19 +105,35 @@ public final class ErfolgeScanner implements MenuScanner {
             long goal = reading.goal();
             boolean done = reading.finished();
             long progress = done ? goal : Math.min(reading.value(), goal);
-            entries.add(new TaskEntry(category, name, goal, progress, done, slot.item(), slot.index()));
+            entries.add(new TaskEntry(
+                    category, name, goal, progress, done, slot.item(),
+                    MenuScanner.sortOrder(page, slot.index()),
+                    TaskLoreParser.targets(slot.lore())));
         }
         return entries;
     }
 
-    /** "Erfolge » Miner (1/2)" → "Miner"; leer, wenn nur ein Präfix übrig bleibt. */
-    static String categoryFromTitle(String title) {
-        String t = title == null ? "" : title.trim();
-        t = TITLE_PREFIX.matcher(t).replaceFirst("");
-        t = TITLE_PAGE_A.matcher(t).replaceFirst("");
-        t = TITLE_PAGE_B.matcher(t).replaceFirst("");
-        // Reste von Symbolen/Trennzeichen an den Rändern entfernen.
-        return t.replaceAll("^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N})\\]]+$", "").trim();
+    @Override
+    public ClickAction classifyClick(SlotData slot) {
+        String name = cleanName(slot.name());
+        if (name.isEmpty()) return ClickAction.NONE;
+
+        if (NAVIGATION.matcher(name).matches()) {
+            if (NEXT.matcher(name).matches()) return new ClickAction(ClickKind.NEXT_PAGE, null);
+            if (PREV.matcher(name).matches()) return new ClickAction(ClickKind.PREV_PAGE, null);
+            return ClickAction.NONE;
+        }
+
+        // Eintrag der Übersicht ("22 von 43 abgeschlossen") → Kategorie öffnen
+        TaskLoreParser.Reading r = TaskLoreParser.read(slot.lore());
+        if (r != null && r.area() && r.strong()) {
+            return new ClickAction(ClickKind.OPEN_CATEGORY, name);
+        }
+        return ClickAction.NONE;
+    }
+
+    private static boolean isNavigation(String rawName) {
+        return NAVIGATION.matcher(cleanName(rawName)).matches();
     }
 
     /** Entfernt führende Symbole (z.B. Haken, Pfeile) und überflüssige Leerzeichen. */
