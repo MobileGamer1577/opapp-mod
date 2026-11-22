@@ -6,11 +6,15 @@
 //                   (asynchron) – nie im Render-Thread
 //
 //  WIE BLÖCKE ERKANNT WERDEN (resolveBlocks):
-//    1. Stichwort im Aufgabennamen (KEYWORDS), z.B. "Kohlenoob" → Kohleerz
-//       + Deepslate-Kohleerz, "Steinklopper" → Stein, "Dioritjäger" → Diorit
-//    2. sonst: das Menü-Icon, falls es ein Block ist (coal_ore → coal_ore
-//       + deepslate_coal_ore)
-//    3. sonst: Aufgabe wird nicht mitgezählt (nur der Scan von /erfolge
+//    1. Ziel-Namen aus der Lore ("Blöcke abbauen: - Lapislazulierz")
+//       werden über die Block-Namen des Spiels (in der Sprache des
+//       Clients) in Block-IDs übersetzt. Das ist die genaueste Quelle.
+//       Funktioniert nur, wenn das Spiel auf Deutsch läuft – sonst
+//       greift Schritt 2.
+//    2. Stichwort im Aufgabennamen (KEYWORDS), z.B. "Kohlenoob" → Kohleerz
+//       + Deepslate-Kohleerz
+//    3. sonst: das Menü-Icon, falls es ein Block ist
+//    4. sonst: Aufgabe wird nicht mitgezählt (nur der Scan von /erfolge
 //       aktualisiert sie)
 //
 //  WANN WIRD GESENDET (alles asynchron):
@@ -26,6 +30,12 @@
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - NEU: Schritt 1 (Ziel-Namen aus der Lore → Block-ID). Behebt z.B.
+//      "Reinforced Deepslate Zerstörer" (zählte vorher normalen
+//      Tiefenschiefer) sowie Endstein, Spawner und "König der Tiefe"
+//      (vorher gar keine Blöcke).
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.track;
@@ -40,6 +50,7 @@ import net.minecraft.block.Block;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -74,6 +85,9 @@ public final class BlockCounter {
         KEYWORDS.put("stein", List.of("stone"));
     }
 
+    /** Block-Anzeigename (klein, in der Sprache des Clients) → Block-ID ohne Namespace. */
+    private static Map<String, String> nameIndex;
+
     private final OpappConfig config;
     private final OpappApi api;
     private final ProgressStore store;
@@ -86,10 +100,13 @@ public final class BlockCounter {
     }
 
     public void register() {
-        // Wird vom Spiel NACH dem clientseitigen Abbau eines Blocks aufgerufen.
-        PlayerBlockBreakEvents.AFTER.register((player, world, pos, state, blockEntity) -> onBlockBroken(state.getBlock()));
-        ClientTickEvents.END_CLIENT_TICK.register(client -> onTick());
-    }
+    PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
+        if (world.isClient()) {
+            onBlockBroken(state.getBlock());
+        }
+    });
+    ClientTickEvents.END_CLIENT_TICK.register(client -> onTick());
+}
 
     private void onBlockBroken(Block block) {
         if (!config.counterEnabled || !api.isLinked()) return;
@@ -131,11 +148,22 @@ public final class BlockCounter {
 
     /**
      * Welche Block-IDs (ohne Namespace) zählen für diese Aufgabe?
-     * Leer = Aufgabe wird nicht mitgezählt.
+     * Leer = Aufgabe wird nicht mitgezählt. Nur vom Client-Thread aufrufen.
      */
     public static Set<String> resolveBlocks(TaskEntry entry) {
         Set<String> result = new LinkedHashSet<>();
 
+        // 1) Ziel-Namen aus der Lore → Block-IDs
+        if (!entry.targets().isEmpty()) {
+            Map<String, String> index = blockNameIndex();
+            for (String label : entry.targets()) {
+                String id = index.get(label.toLowerCase(Locale.ROOT));
+                if (id != null) result.add(id);
+            }
+            if (!result.isEmpty()) return result;
+        }
+
+        // 2) Stichwort im Aufgabennamen
         String name = entry.name().toLowerCase(Locale.ROOT)
                 .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss");
         for (Map.Entry<String, List<String>> keyword : KEYWORDS.entrySet()) {
@@ -145,6 +173,7 @@ public final class BlockCounter {
             }
         }
 
+        // 3) Menü-Icon, falls es ein Block ist
         String icon = entry.icon();
         if (icon != null && isBlock(icon)) {
             result.add(icon);
@@ -154,6 +183,19 @@ public final class BlockCounter {
             }
         }
         return result;
+    }
+
+    /** Baut beim ersten Aufruf die Tabelle Anzeigename → Block-ID (ca. 1.100 Blöcke). */
+    private static synchronized Map<String, String> blockNameIndex() {
+        if (nameIndex == null) {
+            Map<String, String> index = new HashMap<>();
+            for (Block block : Registries.BLOCK) {
+                String label = block.getName().getString().toLowerCase(Locale.ROOT);
+                index.putIfAbsent(label, Registries.BLOCK.getId(block).getPath());
+            }
+            nameIndex = index;
+        }
+        return nameIndex;
     }
 
     private static boolean isBlock(String path) {
