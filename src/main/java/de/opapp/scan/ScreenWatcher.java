@@ -88,7 +88,6 @@ public final class ScreenWatcher {
     private int page;                     // 0 = erste Seite
     private String pendingCategory;       // angeklickt, Seite noch nicht erschienen
     private int pendingPageDelta;         // +1 / -1 nach Klick auf Weiter/Zurück
-    private List<MenuScanner.SlotData> lastOverviewSlots = List.of();
     private boolean warnedNoCategory;
     private int clicksSeen;               // zeigt in /opapp debug, ob Klicks erkannt werden
     private String lastClickInfo = "keiner";
@@ -145,8 +144,8 @@ public final class ScreenWatcher {
         if (container != null) {
             containerSeen = true;
             lastContainerTick = tick;
-            if (tick % INSPECT_EVERY_TICKS == 0) inspect(container);
             pollMouseClicks(client, container);
+            if (tick % INSPECT_EVERY_TICKS == 0) inspect(container);
         } else if (containerSeen) {
             leftMouseDown = false;
             rightMouseDown = false;
@@ -174,7 +173,9 @@ public final class ScreenWatcher {
                 int my = (int) Math.round(client.mouse.getY() / scale);
                 GenericContainerScreenHandler handler = container.getScreenHandler();
                 int rows = handler != null ? handler.getRows() : -1;
-                lastClickInfo = "kein Slot bei (" + mx + "," + my + ") / Screen("
+                int x = readIntField(container, "x", "field_2776", (container.width - 176) / 2);
+                int y = readIntField(container, "y", "field_2800", (container.height - (114 + Math.max(1, rows) * 18)) / 2);
+                lastClickInfo = "kein Slot bei (" + mx + "," + my + ") / gui(" + x + "," + y + ") / Screen("
                         + container.width + "x" + container.height + ") / rows=" + rows;
             }
         }
@@ -192,22 +193,22 @@ public final class ScreenWatcher {
 
         int rows = handler.getRows();
         int menuSlots = rows * 9;
-        int backgroundWidth = 176;
-        int backgroundHeight = 114 + rows * 18;
+        int backgroundWidth = readIntField(container, "backgroundWidth", "field_2792", 176);
+        int backgroundHeight = readIntField(container, "backgroundHeight", "field_2779", 114 + rows * 18);
         int x = readIntField(container, "x", "field_2776", (container.width - backgroundWidth) / 2);
         int y = readIntField(container, "y", "field_2800", (container.height - backgroundHeight) / 2);
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double x1 = x + slot.x - 3.0;
-            double y1 = y + slot.y - 3.0;
-            if (mouseX >= x1 && mouseX <= x1 + 22.0 && mouseY >= y1 && mouseY <= y1 + 22.0) {
+            double x1 = x + slot.x;
+            double y1 = y + slot.y;
+            if (mouseX >= x1 && mouseX < x1 + 16.0 && mouseY >= y1 && mouseY < y1 + 16.0) {
                 return slot;
             }
         }
 
         Slot best = null;
-        double bestDistSq = 64.0 * 64.0;
+        double bestDistSq = 28.0 * 28.0;
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
             double centerX = x + slot.x + 8.0;
@@ -301,7 +302,6 @@ public final class ScreenWatcher {
         page = 0;
         pendingCategory = null;
         pendingPageDelta = 0;
-        lastOverviewSlots = List.of();
         warnedNoCategory = false;
     }
 
@@ -337,21 +337,10 @@ public final class ScreenWatcher {
                 page = 0;
                 pendingCategory = null;
                 pendingPageDelta = 0;
-                if (!slots.isEmpty()) {
-                    lastOverviewSlots = List.copyOf(slots);
-                }
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
             case TASKS -> {
                 String activeCategory = pendingCategory != null ? pendingCategory : category;
-                if ((activeCategory == null || activeCategory.isBlank()) && !lastOverviewSlots.isEmpty()) {
-                    activeCategory = inferDisappearedCategory(lastOverviewSlots, slots);
-                    if (activeCategory != null && !activeCategory.isBlank()) {
-                        pendingCategory = activeCategory;
-                        lastClickInfo = "Auto-Kat -> \"" + activeCategory + "\"";
-                    }
-                }
-
                 if (activeCategory == null || activeCategory.isBlank()) {
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
                     warnNoCategory();
@@ -365,7 +354,6 @@ public final class ScreenWatcher {
                         page = targetPage;
                         pendingCategory = null;
                         pendingPageDelta = 0;
-                        lastOverviewSlots = List.of();
                         entries = scanned;
                         collect(entries);
                         note = "Kategorie \"" + category + "\", Seite " + (page + 1) + ": "
@@ -381,27 +369,6 @@ public final class ScreenWatcher {
         lastSummary = "Titel \"" + title + "\": " + note;
         addDump(buildDump(rawTitle, title, slots, kind, entries, note));
         if (config.debugLive) writeDebugFileAsync();
-    }
-
-    private String inferDisappearedCategory(List<MenuScanner.SlotData> prevOverview, List<MenuScanner.SlotData> currentSlots) {
-        List<String> candidates = new ArrayList<>();
-        for (MenuScanner.SlotData prev : prevOverview) {
-            boolean stillPresent = false;
-            for (MenuScanner.SlotData cur : currentSlots) {
-                if (cur.index() == prev.index() && cur.name().equals(prev.name())) {
-                    stillPresent = true;
-                    break;
-                }
-            }
-            if (!stillPresent) {
-                MenuScanner.ClickAction action = scanner.classifyClick(prev);
-                if (action.kind() == MenuScanner.ClickKind.OPEN_CATEGORY
-                        && action.category() != null && !action.category().isBlank()) {
-                    candidates.add(action.category().trim());
-                }
-            }
-        }
-        return candidates.size() == 1 ? candidates.get(0) : null;
     }
 
     private void collect(List<TaskEntry> entries) {
