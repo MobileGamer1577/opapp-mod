@@ -172,8 +172,10 @@ public final class ScreenWatcher {
                 double scale = client.getWindow().getScaleFactor();
                 int mx = (int) Math.round(client.mouse.getX() / scale);
                 int my = (int) Math.round(client.mouse.getY() / scale);
+                GenericContainerScreenHandler handler = container.getScreenHandler();
+                int rows = handler != null ? handler.getRows() : -1;
                 lastClickInfo = "kein Slot bei (" + mx + "," + my + ") / Screen("
-                        + container.width + "x" + container.height + ")";
+                        + container.width + "x" + container.height + ") / rows=" + rows;
             }
         }
         leftMouseDown = leftNow;
@@ -189,19 +191,28 @@ public final class ScreenWatcher {
         double mouseY = client.mouse.getY() / scale;
 
         int rows = handler.getRows();
+        int menuSlots = rows * 9;
         int backgroundWidth = 176;
         int backgroundHeight = 114 + rows * 18;
         int x = (container.width - backgroundWidth) / 2;
         int y = (container.height - backgroundHeight) / 2;
 
+        Slot best = null;
+        double bestDistSq = 32.0 * 32.0;
+
         for (Slot slot : handler.slots) {
-            int sx = x + slot.x;
-            int sy = y + slot.y;
-            if (mouseX >= sx - 4 && mouseX <= sx + 20 && mouseY >= sy - 4 && mouseY <= sy + 20) {
-                return slot;
+            if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
+            double centerX = x + slot.x + 8.0;
+            double centerY = y + slot.y + 8.0;
+            double dx = mouseX - centerX;
+            double dy = mouseY - centerY;
+            double distSq = dx * dx + dy * dy;
+            if (distSq <= bestDistSq) {
+                bestDistSq = distSq;
+                best = slot;
             }
         }
-        return null;
+        return best;
     }
 
     /** Wird bei einem Klick auf einen Slot aufgerufen (Client-Thread). */
