@@ -313,15 +313,27 @@ public final class ScreenWatcher {
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
             case TASKS -> {
-                applyNavigation();
-                if (category == null) {
+                String activeCategory = pendingCategory != null ? pendingCategory : category;
+                if (activeCategory == null) {
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
                     warnNoCategory();
                 } else {
-                    entries = scanner.scanTasks(category, page, slots);
-                    collect(entries);
-                    note = "Kategorie \"" + category + "\", Seite " + (page + 1) + ": "
-                            + entries.size() + " Aufgaben erkannt";
+                    int targetPage = pendingCategory != null
+                            ? 0
+                            : (pendingPageDelta != 0 ? Math.max(0, page + pendingPageDelta) : page);
+                    List<TaskEntry> scanned = scanner.scanTasks(activeCategory, targetPage, slots);
+                    if (!scanned.isEmpty()) {
+                        category = activeCategory;
+                        page = targetPage;
+                        pendingCategory = null;
+                        pendingPageDelta = 0;
+                        entries = scanned;
+                        collect(entries);
+                        note = "Kategorie \"" + category + "\", Seite " + (page + 1) + ": "
+                                + entries.size() + " Aufgaben erkannt";
+                    } else {
+                        note = "Aufgaben-Seite noch im Aufbau / leer – warte auf vollständige Slots";
+                    }
                 }
             }
             default -> note = "keine Aufgaben erkannt (leer oder Ladezustand)";
@@ -330,19 +342,6 @@ public final class ScreenWatcher {
         lastSummary = "Titel \"" + title + "\": " + note;
         addDump(buildDump(rawTitle, title, slots, kind, entries, note));
         if (config.debugLive) writeDebugFileAsync();
-    }
-
-    /** Übernimmt Klick-Informationen, sobald die zugehörige Aufgaben-Seite erscheint. */
-    private void applyNavigation() {
-        if (pendingCategory != null) {
-            category = pendingCategory;
-            page = 0;
-            pendingCategory = null;
-            pendingPageDelta = 0;
-        } else if (pendingPageDelta != 0) {
-            page = Math.max(0, page + pendingPageDelta);
-            pendingPageDelta = 0;
-        }
     }
 
     private void collect(List<TaskEntry> entries) {
