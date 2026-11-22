@@ -21,7 +21,6 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.LoreComponent;
 import net.minecraft.item.ItemStack;
@@ -157,9 +156,9 @@ public final class ScreenWatcher {
     }
 
     private void pollMouseClicks(MinecraftClient client, GenericContainerScreen container) {
-        var window = client.getWindow();
-        boolean leftNow = InputUtil.isKeyPressed(window, GLFW.GLFW_MOUSE_BUTTON_LEFT);
-        boolean rightNow = InputUtil.isKeyPressed(window, GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        long handle = client.getWindow().getHandle();
+        boolean leftNow = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+        boolean rightNow = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
 
         if ((leftNow && !leftMouseDown) || (rightNow && !rightMouseDown)) {
             Slot hovered = findHoveredSlot(client, container);
