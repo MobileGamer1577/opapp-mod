@@ -11,14 +11,22 @@
 //    /opapp status          verbunden? als wer? Menü-/Zählerstand
 //    /opapp unlink          lokalen Token löschen (Fortschritt in der App
 //                           bleibt; in der App lässt sich zusätzlich trennen)
-//    /opapp debug           zuletzt gelesene Menü-Seite nach
+//    /opapp debug           Zustand + zuletzt gelesene Menü-Seiten nach
 //                           config/opapp-debug.txt schreiben
+//    /opapp debug live      Debug-Datei bei jeder neuen Seite automatisch
+//                           aktualisieren (an/aus) – auch im offenen Menü
 //
 //  Alle Netzwerk-Aufrufe laufen asynchron (siehe OpappApi); die Befehle
 //  selbst kehren sofort zurück.
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - /opapp debug gibt zusätzlich den Zustand aus (Kategorie, Seite,
+//      gesammelte Aufgaben, erkannte Klicks) und schreibt die letzten
+//      Seiten statt nur der letzten.
+//    - NEU: /opapp debug live.
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.command;
@@ -30,13 +38,10 @@ import de.opapp.config.OpappConfig;
 import de.opapp.net.OpappApi;
 import de.opapp.scan.ScreenWatcher;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.Formatting;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
@@ -73,14 +78,20 @@ public final class OpappCommand {
                                 .executes(ctx -> {
                                     debug(watcher);
                                     return Command.SINGLE_SUCCESS;
-                                }))));
+                                })
+                                .then(literal("live")
+                                        .executes(ctx -> {
+                                            debugLive(config);
+                                            return Command.SINGLE_SUCCESS;
+                                        })))));
     }
 
     private static void help() {
         OpappMod.chat("/opapp link <code>  – mit der App verbinden (Code aus Einstellungen → Konto)");
         OpappMod.chat("/opapp status       – Verbindungsstatus");
         OpappMod.chat("/opapp unlink       – Verbindung auf diesem PC lösen");
-        OpappMod.chat("/opapp debug        – zuletzt gelesenes Menü in eine Datei schreiben");
+        OpappMod.chat("/opapp debug        – zuletzt gelesene Menü-Seiten in eine Datei schreiben");
+        OpappMod.chat("/opapp debug live   – Debug-Datei automatisch aktuell halten (an/aus)");
     }
 
     private static void link(OpappApi api, String code) {
@@ -115,20 +126,27 @@ public final class OpappCommand {
     }
 
     private static void debug(ScreenWatcher watcher) {
-        String dump = watcher.lastDump();
-        if (dump.isBlank()) {
+        OpappMod.chat(watcher.stateSummary());
+        if (!watcher.hasDebugData()) {
             OpappMod.chat("Noch nichts gelesen. Öffne /erfolge, klicke eine Kategorie an und tippe dann "
                     + "/opapp debug.", Formatting.YELLOW);
             return;
         }
-        Path file = FabricLoader.getInstance().getConfigDir().resolve("opapp-debug.txt");
         try {
-            Files.writeString(file, dump, StandardCharsets.UTF_8);
+            Path file = watcher.writeDebugFile();
             OpappMod.chat(watcher.lastSummary());
             OpappMod.chat("Vollständig gespeichert in: " + file.toAbsolutePath(), Formatting.GREEN);
         } catch (IOException e) {
             OpappMod.LOG.error("Debug-Datei konnte nicht geschrieben werden.", e);
             OpappMod.chat("Debug-Datei konnte nicht geschrieben werden (siehe Log).", Formatting.RED);
         }
+    }
+
+    private static void debugLive(OpappConfig config) {
+        config.debugLive = !config.debugLive;
+        config.save();
+        OpappMod.chat(config.debugLive
+                ? "Live-Debug AN: config/opapp-debug.txt wird bei jeder neuen Menü-Seite aktualisiert."
+                : "Live-Debug AUS.", config.debugLive ? Formatting.GREEN : Formatting.YELLOW);
     }
 }
