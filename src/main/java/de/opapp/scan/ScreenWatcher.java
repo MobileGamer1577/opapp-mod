@@ -161,6 +161,7 @@ public final class ScreenWatcher {
         boolean rightNow = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
 
         if ((leftNow && !leftMouseDown) || (rightNow && !rightMouseDown)) {
+            clicksSeen++;
             Slot hovered = findHoveredSlot(client, container);
             if (hovered != null && hovered.hasStack()) {
                 handleClick(hovered.id, hovered.getStack());
@@ -187,7 +188,7 @@ public final class ScreenWatcher {
         for (Slot slot : handler.slots) {
             int sx = x + slot.x;
             int sy = y + slot.y;
-            if (mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17) {
+            if (mouseX >= sx - 2 && mouseX <= sx + 18 && mouseY >= sy - 2 && mouseY <= sy + 18) {
                 return slot;
             }
         }
@@ -210,7 +211,6 @@ public final class ScreenWatcher {
         int menuSlots = container.getScreenHandler().getRows() * 9;
         if (slotId < 0 || slotId >= menuSlots) return;
 
-        clicksSeen++;
         MenuScanner.ClickAction action = scanner.classifyClick(toSlotData(slotId, stack));
         switch (action.kind()) {
             case OPEN_CATEGORY -> {
