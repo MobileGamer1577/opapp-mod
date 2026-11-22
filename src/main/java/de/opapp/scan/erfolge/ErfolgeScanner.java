@@ -53,12 +53,26 @@ public final class ErfolgeScanner implements MenuScanner {
         return t.contains("erfolg") || t.contains("achievement");
     }
 
+    private static boolean isTrophySlot(SlotData slot) {
+        String lowerName = cleanName(slot.name()).toLowerCase(Locale.ROOT);
+        if (lowerName.startsWith("trophäe ") || lowerName.startsWith("trophaee ")) {
+            return true;
+        }
+        for (String line : slot.lore()) {
+            String l = line.toLowerCase(Locale.ROOT);
+            if (l.contains("trophäe noch nicht erreicht") || l.startsWith("benötigt:")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public PageKind classify(List<SlotData> slots) {
         int areas = 0;
         int tasks = 0;
         for (SlotData slot : slots) {
-            if (slot.lore().isEmpty() || isNavigation(slot.name())) continue;
+            if (slot.lore().isEmpty() || isNavigation(slot.name()) || isTrophySlot(slot)) continue;
             TaskLoreParser.Reading r = TaskLoreParser.read(slot.lore());
             if (r == null || !r.strong()) continue;
             if (r.area()) areas++;
@@ -73,7 +87,7 @@ public final class ErfolgeScanner implements MenuScanner {
     public List<TaskEntry> scanTasks(String category, int page, List<SlotData> slots) {
         List<TaskEntry> entries = new ArrayList<>();
         for (SlotData slot : slots) {
-            if (slot.lore().isEmpty()) continue;
+            if (slot.lore().isEmpty() || isTrophySlot(slot)) continue;
 
             String name = cleanName(slot.name());
             if (name.isEmpty() || NAVIGATION.matcher(name).matches()) continue;
@@ -100,6 +114,10 @@ public final class ErfolgeScanner implements MenuScanner {
         if (NAVIGATION.matcher(name).matches()) {
             if (NEXT.matcher(name).matches()) return new ClickAction(ClickKind.NEXT_PAGE, null);
             if (PREV.matcher(name).matches()) return new ClickAction(ClickKind.PREV_PAGE, null);
+            return ClickAction.NONE;
+        }
+
+        if (name.equalsIgnoreCase("aufgaben")) {
             return ClickAction.NONE;
         }
 
