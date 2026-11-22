@@ -360,7 +360,7 @@ public final class ScreenWatcher {
 
         MenuScanner.PageKind kind = scanner.classify(slots);
         List<TaskEntry> entries = null;
-        String note;
+        String note = "";
 
         switch (kind) {
             case OVERVIEW -> {
@@ -394,7 +394,8 @@ public final class ScreenWatcher {
                     }
                 }
             }
-            default -> note = "keine Aufgaben erkannt (leer oder Ladezustand)";
+            case EMPTY -> note = "keine Aufgaben erkannt (leer oder Ladezustand)";
+            default -> note = "unbekannter Seitentyp";
         }
 
         lastSummary = "Titel \"" + title + "\": " + note;
