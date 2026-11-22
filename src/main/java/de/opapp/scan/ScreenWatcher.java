@@ -89,6 +89,7 @@ public final class ScreenWatcher {
     private int pendingPageDelta;         // +1 / -1 nach Klick auf Weiter/Zurück
     private boolean warnedNoCategory;
     private int clicksSeen;               // zeigt in /opapp debug, ob Klicks erkannt werden
+    private String lastClickInfo = "keiner";
 
     /** Während der Sitzung gesammelte Aufgaben (Schlüssel → Aufgabe). */
     private final Map<String, TaskEntry> pending = new LinkedHashMap<>();
@@ -164,7 +165,15 @@ public final class ScreenWatcher {
             clicksSeen++;
             Slot hovered = findHoveredSlot(client, container);
             if (hovered != null && hovered.hasStack()) {
+                lastClickInfo = "Slot [" + hovered.id + "] ("
+                        + TextClean.clean(hovered.getStack().getName().getString()) + ")";
                 handleClick(hovered.id, hovered.getStack());
+            } else {
+                double scale = client.getWindow().getScaleFactor();
+                int mx = (int) Math.round(client.mouse.getX() / scale);
+                int my = (int) Math.round(client.mouse.getY() / scale);
+                lastClickInfo = "kein Slot bei (" + mx + "," + my + ") / Screen("
+                        + container.width + "x" + container.height + ")";
             }
         }
         leftMouseDown = leftNow;
@@ -188,7 +197,7 @@ public final class ScreenWatcher {
         for (Slot slot : handler.slots) {
             int sx = x + slot.x;
             int sy = y + slot.y;
-            if (mouseX >= sx - 2 && mouseX <= sx + 18 && mouseY >= sy - 2 && mouseY <= sy + 18) {
+            if (mouseX >= sx - 4 && mouseX <= sx + 20 && mouseY >= sy - 4 && mouseY <= sy + 20) {
                 return slot;
             }
         }
@@ -390,7 +399,8 @@ public final class ScreenWatcher {
                 + " · Kategorie: " + (category != null ? category + " (Seite " + (page + 1) + ")" : "unbekannt")
                 + " · gesammelt: " + pending.size()
                 + " · erkannt gesamt: " + store.size()
-                + " · Klicks erkannt: " + clicksSeen;
+                + " · Klicks erkannt: " + clicksSeen
+                + " · letzter Klick: " + lastClickInfo;
     }
 
     public String debugReport() {
