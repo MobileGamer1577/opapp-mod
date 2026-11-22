@@ -6,48 +6,6 @@
 //                   Mod liest nur, was der Server ohnehin schon geschickt
 //                   hat (und beobachtet, worauf DU klickst). Kein Zugriff
 //                   aus dem Render-Thread (nur Tick bzw. Klick-Event).
-//
-//  SITZUNG:
-//    Start  - Spieler tippt einen Menü-Befehl (/erfolge, /a …) oder ein
-//             Container-Fenster hat einen passenden Titel
-//    Lauf   - solange ein Container-Fenster offen ist, wird alle paar
-//             Ticks geprüft, ob sich der Inhalt geändert hat
-//    Ende   - kein Container-Fenster mehr für SESSION_GRACE_TICKS Ticks
-//             (= Menü geschlossen, E/Esc) → alle gesammelten Aufgaben
-//             werden in EINEM asynchronen Request gesendet
-//
-//  KATEGORIE UND SEITEN (Fix 1.0.1):
-//    Der Fenstertitel enthält nur Font-Glyphen, keinen Kategorienamen.
-//    Deshalb beobachtet der HandledScreenMixin Klicks auf Menü-Slots:
-//      - Klick auf einen Übersichts-Eintrag ("Miner")  → neue Kategorie
-//      - Klick auf "Weiter" / "Zurück"                 → Seite ±1
-//    Die Kategorie gilt, bis wieder die Übersicht zu sehen ist. Alle
-//    gelesenen Seiten landen in "pending" (Schlüssel Kategorie|Name) –
-//    Umblättern überschreibt oder verliert also nichts. Gesendet wird
-//    erst beim Schließen.
-//    Wird eine Aufgaben-Seite ohne bekannte Kategorie geöffnet (z.B. weil
-//    das Menü schon offen war), wird sie NICHT gesendet und der Spieler
-//    einmal im Chat darauf hingewiesen.
-//
-//  PERFORMANCE: Ohne Sitzung kostet ein Tick nur einen Vergleich. Mit
-//  Sitzung wird nur alle INSPECT_EVERY_TICKS Ticks ein Menü mit höchstens
-//  54 Slots gelesen – kein Rendering, keine Allokation pro Frame.
-//
-//  DEBUG: Die letzten MAX_DUMPS gelesenen Seiten werden als Text
-//  vorgehalten und mit /opapp debug in config/opapp-debug.txt geschrieben
-//  (inkl. Zustand). Mit /opapp debug live wird die Datei bei jeder neuen
-//  Seite automatisch (asynchron) aktualisiert – auch im offenen Menü.
-//
-//  ÄNDERUNGEN (Erfolge-Update):
-//    - NEU: Datei.
-//
-//  ÄNDERUNGEN (Fix 1.0.1):
-//    - 🐛 Kategorie aus dem Titel (nur Glyphen) → Worker lehnte alles ab.
-//      Jetzt Kategorie aus dem Klick (siehe oben).
-//    - Titel, Namen und Lore laufen durch TextClean (Glyphen raus).
-//    - Seiten-Tracking für mehrseitige Kategorien (Sortier-Nummer).
-//    - Debug: Ringpuffer mehrerer Seiten, Zustandskopf, Rohtitel als
-//      Unicode-Codepoints, "debug live".
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.scan;
@@ -63,13 +21,16 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.LoreComponent;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.GenericContainerScreenHandler;
+import net.minecraft.screen.slot.Slot;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -119,13 +80,16 @@ public final class ScreenWatcher {
     private boolean containerSeen;
     private int lastHash;
 
+    private boolean leftMouseDown;
+    private boolean rightMouseDown;
+
     // ─ Kategorie / Seite ─
     private String category;              // null = (noch) unbekannt
     private int page;                     // 0 = erste Seite
     private String pendingCategory;       // angeklickt, Seite noch nicht erschienen
     private int pendingPageDelta;         // +1 / -1 nach Klick auf Weiter/Zurück
     private boolean warnedNoCategory;
-    private int clicksSeen;               // zeigt in /opapp debug, ob der Mixin greift
+    private int clicksSeen;               // zeigt in /opapp debug, ob Klicks erkannt werden
 
     /** Während der Sitzung gesammelte Aufgaben (Schlüssel → Aufgabe). */
     private final Map<String, TaskEntry> pending = new LinkedHashMap<>();
@@ -165,6 +129,8 @@ public final class ScreenWatcher {
 
         // ─ Keine Sitzung: höchstens gelegentlich den Titel prüfen ─
         if (scanner == null) {
+            leftMouseDown = false;
+            rightMouseDown = false;
             if (container != null && tick % AUTOSTART_CHECK_TICKS == 0) {
                 MenuScanner found = MenuScannerRegistry
                         .findByTitle(TextClean.clean(container.getTitle().getString()));
@@ -178,14 +144,58 @@ public final class ScreenWatcher {
             containerSeen = true;
             lastContainerTick = tick;
             if (tick % INSPECT_EVERY_TICKS == 0) inspect(container);
+            pollMouseClicks(client, container);
         } else if (containerSeen) {
+            leftMouseDown = false;
+            rightMouseDown = false;
             if (tick - lastContainerTick > SESSION_GRACE_TICKS) endSession();
         } else if (tick - sessionStartTick > SESSION_START_TIMEOUT_TICKS) {
+            leftMouseDown = false;
+            rightMouseDown = false;
             scanner = null; // Befehl hat kein Menü geöffnet
         }
     }
 
-    /** Wird vom HandledScreenMixin bei JEDEM Klick auf einen Slot aufgerufen (Client-Thread). */
+    private void pollMouseClicks(MinecraftClient client, GenericContainerScreen container) {
+        var window = client.getWindow();
+        boolean leftNow = InputUtil.isKeyPressed(window, GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        boolean rightNow = InputUtil.isKeyPressed(window, GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+
+        if ((leftNow && !leftMouseDown) || (rightNow && !rightMouseDown)) {
+            Slot hovered = findHoveredSlot(client, container);
+            if (hovered != null && hovered.hasStack()) {
+                handleClick(hovered.id, hovered.getStack());
+            }
+        }
+        leftMouseDown = leftNow;
+        rightMouseDown = rightNow;
+    }
+
+    private static Slot findHoveredSlot(MinecraftClient client, GenericContainerScreen container) {
+        GenericContainerScreenHandler handler = container.getScreenHandler();
+        if (handler == null) return null;
+
+        double scale = client.getWindow().getScaleFactor();
+        double mouseX = client.mouse.getX() / scale;
+        double mouseY = client.mouse.getY() / scale;
+
+        int rows = handler.getRows();
+        int backgroundWidth = 176;
+        int backgroundHeight = 114 + rows * 18;
+        int x = (container.width - backgroundWidth) / 2;
+        int y = (container.height - backgroundHeight) / 2;
+
+        for (Slot slot : handler.slots) {
+            int sx = x + slot.x;
+            int sy = y + slot.y;
+            if (mouseX >= sx - 1 && mouseX < sx + 17 && mouseY >= sy - 1 && mouseY < sy + 17) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    /** Wird bei einem Klick auf einen Slot aufgerufen (Client-Thread). */
     public static void onSlotClicked(int slotId, ItemStack stack) {
         ScreenWatcher watcher = instance;
         if (watcher != null) watcher.handleClick(slotId, stack);
@@ -277,9 +287,6 @@ public final class ScreenWatcher {
 
         switch (kind) {
             case OVERVIEW -> {
-                // Zurück in der Kategorien-Übersicht: Kategorie vergessen.
-                // pendingCategory bleibt absichtlich erhalten (Klick kann
-                // vor dem Erscheinen der neuen Seite ein Neuzeichnen auslösen).
                 category = null;
                 page = 0;
                 pendingPageDelta = 0;
@@ -334,12 +341,6 @@ public final class ScreenWatcher {
                 + "über das Erfolge-Hauptmenü (/erfolge → Kategorie anklicken).", Formatting.YELLOW);
     }
 
-    /**
-     * Erledigte Aufgaben liefern in der Lore manchmal nur "abgeschlossen"
-     * ohne Zielwert (dann Ziel = 1). Ist das echte Ziel schon aus einem
-     * früheren Scan bekannt, wird es wieder eingesetzt – sonst würde das
-     * Ziel im Katalog fälschlich auf 1 gesetzt.
-     */
     private TaskEntry withKnownGoal(TaskEntry entry) {
         if (!entry.done() || entry.goal() != 1) return entry;
         Long known = store.knownGoal(entry.key());
@@ -377,17 +378,14 @@ public final class ScreenWatcher {
     //  Debug
     // ═══════════════════════════════════════════════════════════
 
-    /** true, sobald mindestens eine Seite gelesen wurde. */
     public boolean hasDebugData() {
         return !dumps.isEmpty();
     }
 
-    /** Kurzfassung der zuletzt gelesenen Seite. */
     public String lastSummary() {
         return lastSummary;
     }
 
-    /** Ein Satz zum aktuellen Zustand (für den Chat). */
     public String stateSummary() {
         return "Sitzung: " + (scanner != null ? "aktiv" : "aus")
                 + " · Kategorie: " + (category != null ? category + " (Seite " + (page + 1) + ")" : "unbekannt")
@@ -396,7 +394,6 @@ public final class ScreenWatcher {
                 + " · Klicks erkannt: " + clicksSeen;
     }
 
-    /** Vollständiger Debug-Text: Zustand + die letzten Seiten (älteste zuerst). */
     public String debugReport() {
         StringBuilder sb = new StringBuilder();
         sb.append("OPAPP Debug – ")
@@ -411,7 +408,6 @@ public final class ScreenWatcher {
         return sb.toString();
     }
 
-    /** Schreibt config/opapp-debug.txt (blockierend, nur für /opapp debug). */
     public Path writeDebugFile() throws IOException {
         Path file = debugFile();
         Files.writeString(file, debugReport(), StandardCharsets.UTF_8);
