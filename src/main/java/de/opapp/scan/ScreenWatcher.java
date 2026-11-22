@@ -184,30 +184,35 @@ public final class ScreenWatcher {
     }
 
     private static Slot findHoveredSlot(MinecraftClient client, GenericContainerScreen container) {
+        GenericContainerScreenHandler handler = container.getScreenHandler();
+        if (handler == null) return null;
+
+        int rows = handler.getRows();
+        int menuSlots = rows * 9;
+
         Object directHovered = readObjectField(container, "hoveredSlot", "field_2787");
         if (directHovered instanceof Slot slot && slot.hasStack()) {
-            int menuSlots = container.getScreenHandler().getRows() * 9;
             if (slot.id >= 0 && slot.id < menuSlots) {
                 return slot;
             }
         }
 
-        GenericContainerScreenHandler handler = container.getScreenHandler();
-        if (handler == null) return null;
-
         double scale = client.getWindow().getScaleFactor();
         double mouseX = client.mouse.getX() / scale;
         double mouseY = client.mouse.getY() / scale;
 
-        int rows = handler.getRows();
-        int menuSlots = rows * 9;
         int backgroundWidth = readIntField(container, "backgroundWidth", "field_2792", 176);
         int backgroundHeight = readIntField(container, "backgroundHeight", "field_2779", 114 + rows * 18);
         int x = readIntField(container, "x", "field_2776", (container.width - backgroundWidth) / 2);
         int y = readIntField(container, "y", "field_2800", (container.height - backgroundHeight) / 2);
 
+        if (mouseX < x - 4 || mouseX > x + backgroundWidth + 4
+                || mouseY < y - 4 || mouseY > y + backgroundHeight + 4) {
+            return null;
+        }
+
         Slot best = null;
-        double bestDistSq = 26.0 * 26.0;
+        double bestDistSq = 24.0 * 24.0;
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
