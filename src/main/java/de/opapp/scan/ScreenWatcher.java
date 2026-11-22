@@ -199,15 +199,15 @@ public final class ScreenWatcher {
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double x1 = x + slot.x - 2.0;
-            double y1 = y + slot.y - 2.0;
-            if (mouseX >= x1 && mouseX <= x1 + 20.0 && mouseY >= y1 && mouseY <= y1 + 20.0) {
+            double x1 = x + slot.x - 3.0;
+            double y1 = y + slot.y - 3.0;
+            if (mouseX >= x1 && mouseX <= x1 + 22.0 && mouseY >= y1 && mouseY <= y1 + 22.0) {
                 return slot;
             }
         }
 
         Slot best = null;
-        double bestDistSq = 56.0 * 56.0;
+        double bestDistSq = 64.0 * 64.0;
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
             double centerX = x + slot.x + 8.0;
@@ -337,15 +337,20 @@ public final class ScreenWatcher {
                 page = 0;
                 pendingCategory = null;
                 pendingPageDelta = 0;
-                lastOverviewSlots = List.copyOf(slots);
+                if (!slots.isEmpty()) {
+                    lastOverviewSlots = List.copyOf(slots);
+                }
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
             case TASKS -> {
                 String activeCategory = pendingCategory != null ? pendingCategory : category;
                 if ((activeCategory == null || activeCategory.isBlank()) && !lastOverviewSlots.isEmpty()) {
                     activeCategory = inferDisappearedCategory(lastOverviewSlots, slots);
+                    if (activeCategory != null && !activeCategory.isBlank()) {
+                        pendingCategory = activeCategory;
+                        lastClickInfo = "Auto-Kat -> \"" + activeCategory + "\"";
+                    }
                 }
-                lastOverviewSlots = List.of();
 
                 if (activeCategory == null || activeCategory.isBlank()) {
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
@@ -360,6 +365,7 @@ public final class ScreenWatcher {
                         page = targetPage;
                         pendingCategory = null;
                         pendingPageDelta = 0;
+                        lastOverviewSlots = List.of();
                         entries = scanned;
                         collect(entries);
                         note = "Kategorie \"" + category + "\", Seite " + (page + 1) + ": "
