@@ -200,9 +200,9 @@ public final class ScreenWatcher {
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double x1 = x + slot.x - 1.0;
-            double y1 = y + slot.y - 1.0;
-            if (mouseX >= x1 && mouseX <= x1 + 18.0 && mouseY >= y1 && mouseY <= y1 + 18.0) {
+            double x1 = x + slot.x - 3.0;
+            double y1 = y + slot.y - 3.0;
+            if (mouseX >= x1 && mouseX <= x1 + 22.0 && mouseY >= y1 && mouseY <= y1 + 22.0) {
                 return slot;
             }
         }
@@ -262,8 +262,8 @@ public final class ScreenWatcher {
                 lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (-1)";
             }
             default -> {
-                if (itemName.toLowerCase(Locale.ROOT).contains("zurück")
-                        || itemName.toLowerCase(Locale.ROOT).contains("back")) {
+                String lower = itemName.toLowerCase(Locale.ROOT);
+                if (lower.contains("zurück") || lower.contains("back") || lower.equals("aufgaben")) {
                     category = null;
                     pendingCategory = null;
                     page = 0;
@@ -380,7 +380,7 @@ public final class ScreenWatcher {
         if (warnedNoCategory) return;
         warnedNoCategory = true;
         OpappMod.chat("Kategorie nicht erkannt – diese Seite wird nicht gesendet. Öffne die Kategorie "
-                + "über das Erfolge-Hauptmenü (/erfolge → Kategorie anklicken).", Formatting.YELLOW);
+                + "über das Erfolge-Hauptmenü (/erfolge → Aufgaben → Kategorie anklicken).", Formatting.YELLOW);
     }
 
     private TaskEntry withKnownGoal(TaskEntry entry) {
