@@ -292,8 +292,16 @@ public final class ScreenWatcher {
                 lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Weiter (+1)";
             }
             case PREV_PAGE -> {
-                pendingPageDelta = -1;
-                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (-1)";
+                if (page <= 0) {
+                    category = null;
+                    pendingCategory = null;
+                    page = 0;
+                    pendingPageDelta = 0;
+                    lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (Kategorie reset)";
+                } else {
+                    pendingPageDelta = -1;
+                    lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (-1)";
+                }
             }
             default -> {
                 String lower = itemName.toLowerCase(Locale.ROOT);
