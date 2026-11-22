@@ -9,7 +9,7 @@
 //
 //  ENDPUNKTE (siehe src/achievements.js im Worker-Repo opapp-api):
 //    POST /api/link   { code, mc_uuid, mc_name }        → { token }
-//    POST /api/sync   { menu, client, mc_name, entries } → { accepted }
+//    POST /api/sync   { menu, client, mc_name, entries } → { accepted, rejected }
 //                     Header: Authorization: Bearer <token>
 //
 //  Bei HTTP 401 (Token ungültig, z.B. in der App getrennt) wird der
@@ -17,6 +17,12 @@
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - Die Chat-Meldung nennt jetzt auch "rejected" aus der Worker-
+//      Antwort. Lehnt der Worker Aufgaben ab, erscheint eine Warnung
+//      statt einer irreführenden Erfolgsmeldung ("0 Aufgaben
+//      synchronisiert" war genau dieses Symptom).
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.net;
@@ -104,7 +110,7 @@ public final class OpappApi {
      * Sendet Aufgaben eines Menüs an den Worker (in Paketen zu je
      * {@value #CHUNK_SIZE}).
      *
-     * @param announce true = nach Erfolg eine kurze Chat-Meldung (falls in
+     * @param announce true = nach Abschluss eine kurze Chat-Meldung (falls in
      *                 der Config erlaubt) – für Scans, nicht für Zähler
      * @return Future, das mit true (alles gesendet) oder false (Fehler) endet;
      *         wirft nie
@@ -119,23 +125,35 @@ public final class OpappApi {
         String mcName = client.player != null ? client.player.getName().getString() : null;
 
         AtomicInteger accepted = new AtomicInteger();
+        AtomicInteger rejected = new AtomicInteger();
         CompletableFuture<Boolean> chain = CompletableFuture.completedFuture(true);
         for (List<TaskEntry> chunk : partition(entries, CHUNK_SIZE)) {
             chain = chain.thenCompose(ok -> ok
-                    ? sendChunk(menu, chunk, mcName, accepted)
+                    ? sendChunk(menu, chunk, mcName, accepted, rejected)
                     : CompletableFuture.completedFuture(false));
         }
 
         return chain.thenApply(ok -> {
             if (ok && announce && config.chatFeedback) {
-                OpappMod.chat(accepted.get() + " Aufgaben mit der App synchronisiert.", Formatting.GREEN);
+                announceResult(accepted.get(), rejected.get());
             }
             return ok;
         });
     }
 
+    private static void announceResult(int accepted, int rejected) {
+        if (accepted == 0 && rejected > 0) {
+            OpappMod.chat("Der Server hat alle " + rejected + " Aufgaben abgelehnt. "
+                    + "Bitte /opapp debug ausführen und die Datei melden.", Formatting.RED);
+        } else if (rejected > 0) {
+            OpappMod.chat(accepted + " Aufgaben synchronisiert, " + rejected + " abgelehnt.", Formatting.YELLOW);
+        } else {
+            OpappMod.chat(accepted + " Aufgaben mit der App synchronisiert.", Formatting.GREEN);
+        }
+    }
+
     private CompletableFuture<Boolean> sendChunk(String menu, List<TaskEntry> chunk, String mcName,
-                                                 AtomicInteger accepted) {
+                                                 AtomicInteger accepted, AtomicInteger rejected) {
         JsonObject body = new JsonObject();
         body.addProperty("menu", menu);
         body.addProperty("client", "opapp-mod/" + OpappMod.VERSION);
@@ -150,6 +168,7 @@ public final class OpappApi {
                     JsonObject json = parseObject(response.body());
                     if (status == 200) {
                         if (json != null && json.has("accepted")) accepted.addAndGet(json.get("accepted").getAsInt());
+                        if (json != null && json.has("rejected")) rejected.addAndGet(json.get("rejected").getAsInt());
                         return true;
                     }
                     if (status == 401) {
@@ -182,6 +201,7 @@ public final class OpappApi {
         return builder.build();
     }
 
+    /** Bewusst OHNE targets: Die Ziel-Namen sind nur für den lokalen Zähler. */
     private static JsonObject toJson(TaskEntry entry) {
         JsonObject json = new JsonObject();
         json.addProperty("category", entry.category());
