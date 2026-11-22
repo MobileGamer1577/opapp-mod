@@ -58,20 +58,30 @@ public abstract class HandledScreenMixin {
     private static Slot findSlotAt(HandledScreen<?> screen, ScreenHandler handler, double mouseX, double mouseY) {
         int rows = (handler.slots.size() - 36) / 9;
         if (rows <= 0) return null;
+        int menuSlots = rows * 9;
 
         int containerWidth = 176;
         int containerHeight = 114 + rows * 18;
         int guiLeft = readIntField(screen, "x", "field_2776", (screen.width - containerWidth) / 2);
         int guiTop = readIntField(screen, "y", "field_2800", (screen.height - containerHeight) / 2);
 
+        Slot best = null;
+        double bestDistSq = 10.5 * 10.5;
+
         for (Slot slot : handler.slots) {
-            int x1 = guiLeft + slot.x - 2;
-            int y1 = guiTop + slot.y - 2;
-            if (mouseX >= x1 && mouseX <= x1 + 20 && mouseY >= y1 && mouseY <= y1 + 20) {
-                return slot;
+            if (slot.id < 0 || slot.id >= menuSlots) continue;
+            double cx = guiLeft + slot.x + 8.0;
+            double cy = guiTop + slot.y + 8.0;
+            double dx = mouseX - cx;
+            double dy = mouseY - cy;
+            if (Math.abs(dx) > 9.5 || Math.abs(dy) > 9.5) continue;
+            double distSq = dx * dx + dy * dy;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = slot;
             }
         }
-        return null;
+        return best;
     }
 
     private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
