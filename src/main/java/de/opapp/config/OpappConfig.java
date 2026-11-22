@@ -10,6 +10,12 @@
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - NEU: debugLive – schreibt config/opapp-debug.txt bei jeder neu
+//      gelesenen Menü-Seite automatisch (asynchron). Umschalten mit
+//      /opapp debug live. Bestehende config-Dateien ohne dieses Feld
+//      bekommen automatisch den Standardwert (false).
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.config;
@@ -42,6 +48,9 @@ public final class OpappConfig {
 
     /** Kurze Chat-Meldung nach dem Synchronisieren eines Menüs. */
     public boolean chatFeedback = true;
+
+    /** Debug-Datei bei jeder gelesenen Seite automatisch aktualisieren. */
+    public boolean debugLive = false;
 
     private static Path path() {
         return FabricLoader.getInstance().getConfigDir().resolve("opapp.json");
