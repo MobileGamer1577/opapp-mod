@@ -32,6 +32,7 @@ import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -87,6 +88,7 @@ public final class ScreenWatcher {
     private int page;                     // 0 = erste Seite
     private String pendingCategory;       // angeklickt, Seite noch nicht erschienen
     private int pendingPageDelta;         // +1 / -1 nach Klick auf Weiter/Zurück
+    private List<MenuScanner.SlotData> lastOverviewSlots = List.of();
     private boolean warnedNoCategory;
     private int clicksSeen;               // zeigt in /opapp debug, ob Klicks erkannt werden
     private String lastClickInfo = "keiner";
@@ -192,10 +194,9 @@ public final class ScreenWatcher {
         int menuSlots = rows * 9;
         int backgroundWidth = 176;
         int backgroundHeight = 114 + rows * 18;
-        int x = (container.width - backgroundWidth) / 2;
-        int y = (container.height - backgroundHeight) / 2;
+        int x = readIntField(container, "x", "field_2776", (container.width - backgroundWidth) / 2);
+        int y = readIntField(container, "y", "field_2800", (container.height - backgroundHeight) / 2);
 
-        // 1. Exakter Treffer auf dem 16x16-Slot-Feld (mit kleinem Rand)
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
             double x1 = x + slot.x - 2.0;
@@ -205,9 +206,8 @@ public final class ScreenWatcher {
             }
         }
 
-        // 2. Fallback: nächster Slot innerhalb von 52px
         Slot best = null;
-        double bestDistSq = 52.0 * 52.0;
+        double bestDistSq = 56.0 * 56.0;
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
             double centerX = x + slot.x + 8.0;
@@ -223,6 +223,22 @@ public final class ScreenWatcher {
         return best;
     }
 
+    private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
+        for (String name : new String[]{primary, fallback}) {
+            Class<?> c = target.getClass();
+            while (c != null) {
+                try {
+                    Field f = c.getDeclaredField(name);
+                    f.setAccessible(true);
+                    return f.getInt(target);
+                } catch (ReflectiveOperationException ignored) {
+                    c = c.getSuperclass();
+                }
+            }
+        }
+        return defaultValue;
+    }
+
     /** Wird bei einem Klick auf einen Slot aufgerufen (Client-Thread). */
     public static void onSlotClicked(int slotId, ItemStack stack) {
         ScreenWatcher watcher = instance;
@@ -235,7 +251,6 @@ public final class ScreenWatcher {
         Screen screen = MinecraftClient.getInstance().currentScreen;
         if (!(screen instanceof GenericContainerScreen container)) return;
 
-        // Nur Slots des Menüs, nicht die des Spieler-Inventars darunter.
         int menuSlots = container.getScreenHandler().getRows() * 9;
         if (slotId < 0 || slotId >= menuSlots) return;
 
@@ -266,7 +281,7 @@ public final class ScreenWatcher {
     // ═══════════════════════════════════════════════════════════
 
     private void startSession(MenuScanner newScanner) {
-        if (scanner != null && scanner != newScanner) flushPending(); // anderes Menü: altes erst senden
+        if (scanner != null && scanner != newScanner) flushPending();
         scanner = newScanner;
         sessionStartTick = tick;
         containerSeen = false;
@@ -286,21 +301,16 @@ public final class ScreenWatcher {
         page = 0;
         pendingCategory = null;
         pendingPageDelta = 0;
+        lastOverviewSlots = List.of();
         warnedNoCategory = false;
     }
 
-    /**
-     * Sendet alle gesammelten Aufgaben (asynchron) – beim Schließen des
-     * Menüs und beim Ausloggen. Ist nichts gesammelt (z.B. nur die
-     * Übersicht gesehen), passiert bewusst NICHTS: kein Request, keine
-     * "0 Aufgaben"-Meldung.
-     */
     public void flushPending() {
         if (pending.isEmpty()) return;
         List<TaskEntry> entries = new ArrayList<>(pending.values());
         String menu = pendingMenu;
         pending.clear();
-        if (!api.isLinked()) return; // ohne Verknüpfung nichts senden
+        if (!api.isLinked()) return;
         api.syncAsync(menu, entries, true);
     }
 
@@ -313,7 +323,6 @@ public final class ScreenWatcher {
         String title = TextClean.clean(rawTitle);
         List<MenuScanner.SlotData> slots = readSlots(container.getScreenHandler());
 
-        // Unverändert seit dem letzten Mal? Dann nichts tun.
         int hash = Objects.hash(title, slots);
         if (hash == lastHash) return;
         lastHash = hash;
@@ -328,10 +337,16 @@ public final class ScreenWatcher {
                 page = 0;
                 pendingCategory = null;
                 pendingPageDelta = 0;
+                lastOverviewSlots = List.copyOf(slots);
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
             case TASKS -> {
                 String activeCategory = pendingCategory != null ? pendingCategory : category;
+                if ((activeCategory == null || activeCategory.isBlank()) && !lastOverviewSlots.isEmpty()) {
+                    activeCategory = inferDisappearedCategory(lastOverviewSlots, slots);
+                }
+                lastOverviewSlots = List.of();
+
                 if (activeCategory == null || activeCategory.isBlank()) {
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
                     warnNoCategory();
@@ -360,6 +375,27 @@ public final class ScreenWatcher {
         lastSummary = "Titel \"" + title + "\": " + note;
         addDump(buildDump(rawTitle, title, slots, kind, entries, note));
         if (config.debugLive) writeDebugFileAsync();
+    }
+
+    private String inferDisappearedCategory(List<MenuScanner.SlotData> prevOverview, List<MenuScanner.SlotData> currentSlots) {
+        List<String> candidates = new ArrayList<>();
+        for (MenuScanner.SlotData prev : prevOverview) {
+            boolean stillPresent = false;
+            for (MenuScanner.SlotData cur : currentSlots) {
+                if (cur.index() == prev.index() && cur.name().equals(prev.name())) {
+                    stillPresent = true;
+                    break;
+                }
+            }
+            if (!stillPresent) {
+                MenuScanner.ClickAction action = scanner.classifyClick(prev);
+                if (action.kind() == MenuScanner.ClickKind.OPEN_CATEGORY
+                        && action.category() != null && !action.category().isBlank()) {
+                    candidates.add(action.category().trim());
+                }
+            }
+        }
+        return candidates.size() == 1 ? candidates.get(0) : null;
     }
 
     private void collect(List<TaskEntry> entries) {
