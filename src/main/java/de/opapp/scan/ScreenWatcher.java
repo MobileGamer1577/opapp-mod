@@ -308,6 +308,7 @@ public final class ScreenWatcher {
             case OVERVIEW -> {
                 category = null;
                 page = 0;
+                pendingCategory = null;
                 pendingPageDelta = 0;
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
