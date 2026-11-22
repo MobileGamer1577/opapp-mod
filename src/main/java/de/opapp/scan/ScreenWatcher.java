@@ -200,28 +200,13 @@ public final class ScreenWatcher {
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double x1 = x + slot.x;
-            double y1 = y + slot.y;
-            if (mouseX >= x1 && mouseX < x1 + 16.0 && mouseY >= y1 && mouseY < y1 + 16.0) {
+            double x1 = x + slot.x - 1.0;
+            double y1 = y + slot.y - 1.0;
+            if (mouseX >= x1 && mouseX <= x1 + 18.0 && mouseY >= y1 && mouseY <= y1 + 18.0) {
                 return slot;
             }
         }
-
-        Slot best = null;
-        double bestDistSq = 28.0 * 28.0;
-        for (Slot slot : handler.slots) {
-            if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
-            double centerX = x + slot.x + 8.0;
-            double centerY = y + slot.y + 8.0;
-            double dx = mouseX - centerX;
-            double dy = mouseY - centerY;
-            double distSq = dx * dx + dy * dy;
-            if (distSq <= bestDistSq) {
-                bestDistSq = distSq;
-                best = slot;
-            }
-        }
-        return best;
+        return null;
     }
 
     private static int readIntField(Object target, String primary, String fallback, int defaultValue) {
@@ -261,7 +246,10 @@ public final class ScreenWatcher {
             case OPEN_CATEGORY -> {
                 if (action.category() != null && !action.category().isBlank()) {
                     pendingCategory = action.category().trim();
+                    category = pendingCategory;
+                    page = 0;
                     pendingPageDelta = 0;
+                    warnedNoCategory = false;
                     lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Kat \"" + pendingCategory + "\"";
                 }
             }
@@ -273,7 +261,16 @@ public final class ScreenWatcher {
                 pendingPageDelta = -1;
                 lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Zurück (-1)";
             }
-            default -> lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Keine Aktion";
+            default -> {
+                if (itemName.toLowerCase(Locale.ROOT).contains("zurück")
+                        || itemName.toLowerCase(Locale.ROOT).contains("back")) {
+                    category = null;
+                    pendingCategory = null;
+                    page = 0;
+                    pendingPageDelta = 0;
+                }
+                lastClickInfo = "Slot [" + slotId + "] (" + itemName + ") -> Keine Aktion";
+            }
         }
     }
 
@@ -335,7 +332,6 @@ public final class ScreenWatcher {
             case OVERVIEW -> {
                 category = null;
                 page = 0;
-                pendingCategory = null;
                 pendingPageDelta = 0;
                 note = "Kategorien-Übersicht (wird nicht gesendet)";
             }
