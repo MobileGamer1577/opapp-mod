@@ -6,11 +6,15 @@
 //  ❌ NICHT ÄNDERN: Mod-ID "opapp" (muss zu fabric.mod.json passen)
 //
 //  Die Mod ist rein passiv: kein HUD, kein Rendering, kein Klicken.
-//  Alles läuft über Client-Events (Tick, Befehle, Blockabbau) und
-//  Netzwerk-Aufrufe ausschließlich asynchron (siehe OpappApi).
+//  Alles läuft über Client-Events (Tick, Befehle, Blockabbau, beobachtete
+//  Menü-Klicks) und Netzwerk-Aufrufe ausschließlich asynchron (siehe
+//  OpappApi).
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - ScreenWatcher bekommt die Config (für den Live-Debug-Schalter).
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp;
@@ -48,7 +52,7 @@ public final class OpappMod implements ClientModInitializer {
         OpappApi api = new OpappApi(config);
         ProgressStore store = new ProgressStore();
 
-        ScreenWatcher watcher = new ScreenWatcher(api, store);
+        ScreenWatcher watcher = new ScreenWatcher(api, store, config);
         BlockCounter counter = new BlockCounter(config, api, store);
 
         watcher.register();
