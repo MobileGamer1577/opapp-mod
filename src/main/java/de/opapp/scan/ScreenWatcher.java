@@ -4,38 +4,62 @@
 //  ✅ HIER ÄNDERN: Zeitkonstanten unten (Prüf-Intervall, Wartezeiten)
 //  ❌ NICHT ÄNDERN: Es wird NIE geklickt und kein Paket gesendet – die
 //                   Mod liest nur, was der Server ohnehin schon geschickt
-//                   hat. Kein Zugriff aus dem Render-Thread (nur Tick).
+//                   hat (und beobachtet, worauf DU klickst). Kein Zugriff
+//                   aus dem Render-Thread (nur Tick bzw. Klick-Event).
 //
 //  SITZUNG:
-//    Start  - Spieler tippt einen Menü-Befehl (/erfolge, /a …) ODER ein
+//    Start  - Spieler tippt einen Menü-Befehl (/erfolge, /a …) oder ein
 //             Container-Fenster hat einen passenden Titel
 //    Lauf   - solange ein Container-Fenster offen ist, wird alle paar
-//             Ticks geprüft, ob sich der Inhalt geändert hat. Wechselt der
-//             Spieler per Klick in eine Kategorie, bleibt die Sitzung bestehen.
+//             Ticks geprüft, ob sich der Inhalt geändert hat
 //    Ende   - kein Container-Fenster mehr für SESSION_GRACE_TICKS Ticks
-//             (= Menü geschlossen) → alle gesammelten Aufgaben werden in
-//             EINEM asynchronen Request gesendet
+//             (= Menü geschlossen, E/Esc) → alle gesammelten Aufgaben
+//             werden in EINEM asynchronen Request gesendet
+//
+//  KATEGORIE UND SEITEN (Fix 1.0.1):
+//    Der Fenstertitel enthält nur Font-Glyphen, keinen Kategorienamen.
+//    Deshalb beobachtet der HandledScreenMixin Klicks auf Menü-Slots:
+//      - Klick auf einen Übersichts-Eintrag ("Miner")  → neue Kategorie
+//      - Klick auf "Weiter" / "Zurück"                 → Seite ±1
+//    Die Kategorie gilt, bis wieder die Übersicht zu sehen ist. Alle
+//    gelesenen Seiten landen in "pending" (Schlüssel Kategorie|Name) –
+//    Umblättern überschreibt oder verliert also nichts. Gesendet wird
+//    erst beim Schließen.
+//    Wird eine Aufgaben-Seite ohne bekannte Kategorie geöffnet (z.B. weil
+//    das Menü schon offen war), wird sie NICHT gesendet und der Spieler
+//    einmal im Chat darauf hingewiesen.
 //
 //  PERFORMANCE: Ohne Sitzung kostet ein Tick nur einen Vergleich. Mit
 //  Sitzung wird nur alle INSPECT_EVERY_TICKS Ticks ein Menü mit höchstens
 //  54 Slots gelesen – kein Rendering, keine Allokation pro Frame.
 //
-//  DEBUG: Der Inhalt der zuletzt gelesenen Seite wird als Text vorgehalten
-//  (lastDump) und kann mit /opapp debug in config/opapp-debug.txt
-//  geschrieben werden.
+//  DEBUG: Die letzten MAX_DUMPS gelesenen Seiten werden als Text
+//  vorgehalten und mit /opapp debug in config/opapp-debug.txt geschrieben
+//  (inkl. Zustand). Mit /opapp debug live wird die Datei bei jeder neuen
+//  Seite automatisch (asynchron) aktualisiert – auch im offenen Menü.
 //
 //  ÄNDERUNGEN (Erfolge-Update):
 //    - NEU: Datei.
+//
+//  ÄNDERUNGEN (Fix 1.0.1):
+//    - 🐛 Kategorie aus dem Titel (nur Glyphen) → Worker lehnte alles ab.
+//      Jetzt Kategorie aus dem Klick (siehe oben).
+//    - Titel, Namen und Lore laufen durch TextClean (Glyphen raus).
+//    - Seiten-Tracking für mehrseitige Kategorien (Sortier-Nummer).
+//    - Debug: Ringpuffer mehrerer Seiten, Zustandskopf, Rohtitel als
+//      Unicode-Codepoints, "debug live".
 // ═══════════════════════════════════════════════════════════════
 
 package de.opapp.scan;
 
 import de.opapp.OpappMod;
+import de.opapp.config.OpappConfig;
 import de.opapp.net.OpappApi;
 import de.opapp.track.BlockCounter;
 import de.opapp.track.ProgressStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
@@ -45,15 +69,23 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.GenericContainerScreenHandler;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 public final class ScreenWatcher {
 
@@ -70,6 +102,13 @@ public final class ScreenWatcher {
     /** Auto-Start-Prüfung (Titel) nur alle X Ticks. */
     private static final int AUTOSTART_CHECK_TICKS = 10;
 
+    /** Wie viele zuletzt gelesene Seiten das Debug-Protokoll behält. */
+    private static final int MAX_DUMPS = 8;
+
+    /** Brücke für den HandledScreenMixin (statisch, weil Mixins keine Instanz kennen). */
+    private static volatile ScreenWatcher instance;
+
+    private final OpappConfig config;
     private final OpappApi api;
     private final ProgressStore store;
 
@@ -80,19 +119,29 @@ public final class ScreenWatcher {
     private boolean containerSeen;
     private int lastHash;
 
+    // ─ Kategorie / Seite ─
+    private String category;              // null = (noch) unbekannt
+    private int page;                     // 0 = erste Seite
+    private String pendingCategory;       // angeklickt, Seite noch nicht erschienen
+    private int pendingPageDelta;         // +1 / -1 nach Klick auf Weiter/Zurück
+    private boolean warnedNoCategory;
+    private int clicksSeen;               // zeigt in /opapp debug, ob der Mixin greift
+
     /** Während der Sitzung gesammelte Aufgaben (Schlüssel → Aufgabe). */
     private final Map<String, TaskEntry> pending = new LinkedHashMap<>();
     private String pendingMenu = "";
 
-    private String lastDump = "";
+    private final Deque<String> dumps = new ArrayDeque<>();
     private String lastSummary = "";
 
-    public ScreenWatcher(OpappApi api, ProgressStore store) {
+    public ScreenWatcher(OpappApi api, ProgressStore store, OpappConfig config) {
         this.api = api;
         this.store = store;
+        this.config = config;
     }
 
     public void register() {
+        instance = this;
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         ClientSendMessageEvents.COMMAND.register(this::onCommand);
     }
@@ -104,7 +153,7 @@ public final class ScreenWatcher {
     /** Befehl ohne führenden "/" – z.B. "erfolge" oder "a". */
     private void onCommand(String command) {
         String root = command.trim().split("\\s+", 2)[0].toLowerCase(Locale.ROOT);
-        MenuScanner found = de.opapp.scan.MenuScannerRegistry.findByCommand(root);
+        MenuScanner found = MenuScannerRegistry.findByCommand(root);
         if (found != null) startSession(found);
     }
 
@@ -117,8 +166,8 @@ public final class ScreenWatcher {
         // ─ Keine Sitzung: höchstens gelegentlich den Titel prüfen ─
         if (scanner == null) {
             if (container != null && tick % AUTOSTART_CHECK_TICKS == 0) {
-                MenuScanner found = de.opapp.scan.MenuScannerRegistry
-                        .findByTitle(container.getTitle().getString());
+                MenuScanner found = MenuScannerRegistry
+                        .findByTitle(TextClean.clean(container.getTitle().getString()));
                 if (found != null) startSession(found);
             }
             return;
@@ -136,6 +185,35 @@ public final class ScreenWatcher {
         }
     }
 
+    /** Wird vom HandledScreenMixin bei JEDEM Klick auf einen Slot aufgerufen (Client-Thread). */
+    public static void onSlotClicked(int slotId, ItemStack stack) {
+        ScreenWatcher watcher = instance;
+        if (watcher != null) watcher.handleClick(slotId, stack);
+    }
+
+    private void handleClick(int slotId, ItemStack stack) {
+        if (scanner == null || stack == null || stack.isEmpty()) return;
+
+        Screen screen = MinecraftClient.getInstance().currentScreen;
+        if (!(screen instanceof GenericContainerScreen container)) return;
+
+        // Nur Slots des Menüs, nicht die des Spieler-Inventars darunter.
+        int menuSlots = container.getScreenHandler().getRows() * 9;
+        if (slotId < 0 || slotId >= menuSlots) return;
+
+        clicksSeen++;
+        MenuScanner.ClickAction action = scanner.classifyClick(toSlotData(slotId, stack));
+        switch (action.kind()) {
+            case OPEN_CATEGORY -> {
+                pendingCategory = action.category();
+                pendingPageDelta = 0;
+            }
+            case NEXT_PAGE -> pendingPageDelta = 1;
+            case PREV_PAGE -> pendingPageDelta = -1;
+            default -> { }
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  Sitzung
     // ═══════════════════════════════════════════════════════════
@@ -146,15 +224,30 @@ public final class ScreenWatcher {
         sessionStartTick = tick;
         containerSeen = false;
         lastHash = 0;
+        resetNavigation();
     }
 
     private void endSession() {
         scanner = null;
         containerSeen = false;
         flushPending();
+        resetNavigation();
     }
 
-    /** Sendet alle gesammelten Aufgaben (asynchron) – auch beim Ausloggen aufgerufen. */
+    private void resetNavigation() {
+        category = null;
+        page = 0;
+        pendingCategory = null;
+        pendingPageDelta = 0;
+        warnedNoCategory = false;
+    }
+
+    /**
+     * Sendet alle gesammelten Aufgaben (asynchron) – beim Schließen des
+     * Menüs und beim Ausloggen. Ist nichts gesammelt (z.B. nur die
+     * Übersicht gesehen), passiert bewusst NICHTS: kein Request, keine
+     * "0 Aufgaben"-Meldung.
+     */
     public void flushPending() {
         if (pending.isEmpty()) return;
         List<TaskEntry> entries = new ArrayList<>(pending.values());
@@ -169,39 +262,76 @@ public final class ScreenWatcher {
     // ═══════════════════════════════════════════════════════════
 
     private void inspect(GenericContainerScreen container) {
-        String title = container.getTitle().getString();
-        GenericContainerScreenHandler handler = container.getScreenHandler();
-
-        int size = Math.min(handler.getRows() * 9, handler.slots.size());
-        List<MenuScanner.SlotData> slots = new ArrayList<>();
-        for (int i = 0; i < size; i++) {
-            ItemStack stack = handler.slots.get(i).getStack();
-            if (stack.isEmpty()) continue;
-            slots.add(new MenuScanner.SlotData(
-                    i,
-                    stack.getName().getString(),
-                    readLore(stack),
-                    Registries.ITEM.getId(stack.getItem()).getPath()));
-        }
+        String rawTitle = container.getTitle().getString();
+        String title = TextClean.clean(rawTitle);
+        List<MenuScanner.SlotData> slots = readSlots(container.getScreenHandler());
 
         // Unverändert seit dem letzten Mal? Dann nichts tun.
         int hash = Objects.hash(title, slots);
         if (hash == lastHash) return;
         lastHash = hash;
 
-        List<TaskEntry> entries = scanner.scan(title, slots);
-        lastDump = buildDump(title, slots, entries);
-        lastSummary = entries == null
-                ? "Titel \"" + title + "\": Seite ignoriert (Übersicht / keine Kategorie erkannt)."
-                : "Titel \"" + title + "\": " + entries.size() + " Aufgaben erkannt.";
-        if (entries == null) return;
+        MenuScanner.PageKind kind = scanner.classify(slots);
+        List<TaskEntry> entries = null;
+        String note;
 
+        switch (kind) {
+            case OVERVIEW -> {
+                // Zurück in der Kategorien-Übersicht: Kategorie vergessen.
+                // pendingCategory bleibt absichtlich erhalten (Klick kann
+                // vor dem Erscheinen der neuen Seite ein Neuzeichnen auslösen).
+                category = null;
+                page = 0;
+                pendingPageDelta = 0;
+                note = "Kategorien-Übersicht (wird nicht gesendet)";
+            }
+            case TASKS -> {
+                applyNavigation();
+                if (category == null) {
+                    note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
+                    warnNoCategory();
+                } else {
+                    entries = scanner.scanTasks(category, page, slots);
+                    collect(entries);
+                    note = "Kategorie \"" + category + "\", Seite " + (page + 1) + ": "
+                            + entries.size() + " Aufgaben erkannt";
+                }
+            }
+            default -> note = "keine Aufgaben erkannt (leer oder Ladezustand)";
+        }
+
+        lastSummary = "Titel \"" + title + "\": " + note;
+        addDump(buildDump(rawTitle, title, slots, kind, entries, note));
+        if (config.debugLive) writeDebugFileAsync();
+    }
+
+    /** Übernimmt Klick-Informationen, sobald die zugehörige Aufgaben-Seite erscheint. */
+    private void applyNavigation() {
+        if (pendingCategory != null) {
+            category = pendingCategory;
+            page = 0;
+            pendingCategory = null;
+            pendingPageDelta = 0;
+        } else if (pendingPageDelta != 0) {
+            page = Math.max(0, page + pendingPageDelta);
+            pendingPageDelta = 0;
+        }
+    }
+
+    private void collect(List<TaskEntry> entries) {
         pendingMenu = scanner.menuId();
         for (TaskEntry entry : entries) {
             TaskEntry fixed = withKnownGoal(entry);
             pending.put(fixed.key(), fixed);
             store.applyScan(fixed, BlockCounter.resolveBlocks(fixed));
         }
+    }
+
+    private void warnNoCategory() {
+        if (warnedNoCategory) return;
+        warnedNoCategory = true;
+        OpappMod.chat("Kategorie nicht erkannt – diese Seite wird nicht gesendet. Öffne die Kategorie "
+                + "über das Erfolge-Hauptmenü (/erfolge → Kategorie anklicken).", Formatting.YELLOW);
     }
 
     /**
@@ -216,11 +346,30 @@ public final class ScreenWatcher {
         return known != null && known > 1 ? entry.withGoal(known) : entry;
     }
 
+    private static List<MenuScanner.SlotData> readSlots(GenericContainerScreenHandler handler) {
+        int size = Math.min(handler.getRows() * 9, handler.slots.size());
+        List<MenuScanner.SlotData> slots = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            ItemStack stack = handler.slots.get(i).getStack();
+            if (stack.isEmpty()) continue;
+            slots.add(toSlotData(i, stack));
+        }
+        return slots;
+    }
+
+    private static MenuScanner.SlotData toSlotData(int index, ItemStack stack) {
+        return new MenuScanner.SlotData(
+                index,
+                TextClean.clean(stack.getName().getString()),
+                readLore(stack),
+                Registries.ITEM.getId(stack.getItem()).getPath());
+    }
+
     private static List<String> readLore(ItemStack stack) {
         LoreComponent lore = stack.get(DataComponentTypes.LORE);
         if (lore == null) return List.of();
         List<String> lines = new ArrayList<>();
-        for (Text line : lore.lines()) lines.add(line.getString());
+        for (Text line : lore.lines()) lines.add(TextClean.clean(line.getString()));
         return lines;
     }
 
@@ -228,25 +377,78 @@ public final class ScreenWatcher {
     //  Debug
     // ═══════════════════════════════════════════════════════════
 
-    /** Kurzfassung der zuletzt gelesenen Seite (leer, wenn noch nichts gelesen wurde). */
+    /** true, sobald mindestens eine Seite gelesen wurde. */
+    public boolean hasDebugData() {
+        return !dumps.isEmpty();
+    }
+
+    /** Kurzfassung der zuletzt gelesenen Seite. */
     public String lastSummary() {
         return lastSummary;
     }
 
-    /** Vollständiger Text-Dump der zuletzt gelesenen Seite (leer, wenn noch nichts gelesen wurde). */
-    public String lastDump() {
-        return lastDump;
+    /** Ein Satz zum aktuellen Zustand (für den Chat). */
+    public String stateSummary() {
+        return "Sitzung: " + (scanner != null ? "aktiv" : "aus")
+                + " · Kategorie: " + (category != null ? category + " (Seite " + (page + 1) + ")" : "unbekannt")
+                + " · gesammelt: " + pending.size()
+                + " · erkannt gesamt: " + store.size()
+                + " · Klicks erkannt: " + clicksSeen;
     }
 
-    private static String buildDump(String title, List<MenuScanner.SlotData> slots, List<TaskEntry> entries) {
+    /** Vollständiger Debug-Text: Zustand + die letzten Seiten (älteste zuerst). */
+    public String debugReport() {
         StringBuilder sb = new StringBuilder();
         sb.append("OPAPP Debug – ")
                 .append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")))
                 .append(" – Mod ").append(OpappMod.VERSION).append('\n');
-        sb.append("Fenstertitel: \"").append(title).append("\"\n");
-        sb.append("Ergebnis: ").append(entries == null
-                ? "Seite ignoriert (Übersicht oder keine Kategorie erkannt)"
-                : entries.size() + " Aufgaben erkannt").append('\n');
+        sb.append("Verbunden: ").append(api.isLinked() ? "ja" : "nein").append('\n');
+        sb.append(stateSummary()).append('\n');
+        sb.append("Seiten im Protokoll: ").append(dumps.size()).append(" (max. ").append(MAX_DUMPS).append(")\n");
+        for (String dump : dumps) {
+            sb.append("\n════════════════════════════════════════\n").append(dump);
+        }
+        return sb.toString();
+    }
+
+    /** Schreibt config/opapp-debug.txt (blockierend, nur für /opapp debug). */
+    public Path writeDebugFile() throws IOException {
+        Path file = debugFile();
+        Files.writeString(file, debugReport(), StandardCharsets.UTF_8);
+        return file;
+    }
+
+    private void writeDebugFileAsync() {
+        String report = debugReport();
+        Path file = debugFile();
+        CompletableFuture.runAsync(() -> {
+            try {
+                Files.writeString(file, report, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                OpappMod.LOG.warn("Live-Debug-Datei konnte nicht geschrieben werden: {}", e.toString());
+            }
+        });
+    }
+
+    private static Path debugFile() {
+        return FabricLoader.getInstance().getConfigDir().resolve("opapp-debug.txt");
+    }
+
+    private void addDump(String dump) {
+        dumps.addLast(dump);
+        while (dumps.size() > MAX_DUMPS) dumps.removeFirst();
+    }
+
+    private String buildDump(String rawTitle, String title, List<MenuScanner.SlotData> slots,
+                             MenuScanner.PageKind kind, List<TaskEntry> entries, String note) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Zeit: ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))).append('\n');
+        sb.append("Fenstertitel (bereinigt): \"").append(title).append("\"\n");
+        sb.append("Fenstertitel (roh, Unicode): ").append(TextClean.codePoints(rawTitle)).append('\n');
+        sb.append("Seitentyp: ").append(kind).append('\n');
+        sb.append("Kategorie: ").append(category != null ? category : "(unbekannt)")
+                .append(" · Seite ").append(page + 1).append('\n');
+        sb.append("Ergebnis: ").append(note).append('\n');
         sb.append("Belegte Slots: ").append(slots.size()).append("\n\n");
 
         for (MenuScanner.SlotData slot : slots) {
@@ -256,8 +458,9 @@ public final class ScreenWatcher {
 
             TaskEntry match = null;
             if (entries != null) {
+                int order = MenuScanner.sortOrder(page, slot.index());
                 for (TaskEntry e : entries) {
-                    if (e.slot() == slot.index()) {
+                    if (e.slot() == order && e.name().equalsIgnoreCase(slot.name().replaceAll("^[^\\p{L}\\p{N}]+", ""))) {
                         match = e;
                         break;
                     }
