@@ -212,7 +212,7 @@ public final class ScreenWatcher {
         }
 
         Slot best = null;
-        double bestDistSq = 24.0 * 24.0;
+        double bestDistSq = 28.0 * 28.0;
 
         for (Slot slot : handler.slots) {
             if (slot.id < 0 || slot.id >= menuSlots || !slot.hasStack()) continue;
@@ -274,13 +274,14 @@ public final class ScreenWatcher {
         int menuSlots = container.getScreenHandler().getRows() * 9;
         if (slotId < 0 || slotId >= menuSlots) return;
 
-        String itemName = TextClean.clean(stack.getName().getString());
-        MenuScanner.ClickAction action = scanner.classifyClick(toSlotData(slotId, stack));
+        MenuScanner.SlotData slotData = toSlotData(slotId, stack);
+        String itemName = slotData.name();
+        MenuScanner.ClickAction action = scanner.classifyClick(slotData);
         switch (action.kind()) {
             case OPEN_CATEGORY -> {
                 if (action.category() != null && !action.category().isBlank()) {
                     pendingCategory = action.category().trim();
-                    category = pendingCategory;
+                    category = null;
                     page = 0;
                     pendingPageDelta = 0;
                     warnedNoCategory = false;
@@ -381,6 +382,10 @@ public final class ScreenWatcher {
             case TASKS -> {
                 String activeCategory = pendingCategory != null ? pendingCategory : category;
                 if (activeCategory == null || activeCategory.isBlank()) {
+                    category = null;
+                    pendingCategory = null;
+                    page = 0;
+                    pendingPageDelta = 0;
                     note = "Aufgaben-Seite, aber Kategorie unbekannt – NICHT gesammelt";
                     warnNoCategory();
                 } else {
